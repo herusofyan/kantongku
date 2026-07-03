@@ -1,291 +1,305 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
-import sqlite3
+from datetime import datetime, timedelta
+from supabase import create_client, Client
 import io
 
 # ========================================================
-# 1. INNER DATABASE SYSTEM (SQLite Setup)
+# 1. KONEKSI & DATABASE SETUP
 # ========================================================
-DB_NAME = "database_kantong.db"
+url: str = st.secrets["SUPABASE_URL"]
+key: str = st.secrets["SUPABASE_KEY"]
+supabase: Client = create_client(url, key)
 
-def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            email TEXT PRIMARY KEY,
-            tanggal_daftar TEXT
-        )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS transactions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_email TEXT,
-            tanggal TEXT,
-            jenis TEXT,
-            keterangan TEXT,
-            nominal REAL,
-            FOREIGN KEY (user_email) REFERENCES users(email)
-        )
-    """)
-    conn.commit()
-    conn.close()
-
-init_db()
 EMAIL_ADMIN_PUSAT = "admin@apps.com"
 
+# Inisialisasi State Aplikasi
+if "user_email" not in st.session_state: st.session_state.user_email = None
+if "current_page" not in st.session_state: st.session_state.current_page = "Dashboard"
+if "auth_mode" not in st.session_state: st.session_state.auth_mode = "Login"
+
 # ========================================================
-# 2. KAMUS MULTI-BAHASA (ID / EN)
+# 2. OPTIMASI UI MOBILE (CSS INJECTION)
 # ========================================================
-LANG = {
-    "ID": {
-        "login_header": "Selamat Datang di Kantong Keuangan",
-        "login_subheader": "Silakan masukkan email Anda untuk masuk ke kantong personal",
-        "btn_login": "Masuk ke Aplikasi",
-        "admin_title": "👑 KENDALI PUSAT (Halaman Pemilik)",
-        "admin_subtitle": "Daftar pengguna aktif yang menggunakan aplikasi Anda saat ini",
-        "total_users": "Total Pengguna Terdaftar",
-        "user_list": "Daftar Email Pengguna",
-        "pocket_in": "Kantong Pemasukan",
-        "pocket_out": "Kantong Pengeluaran",
-        "pocket_balance": "Kantong Sisa Uang",
-        "form_title": "Input Transaksi Hari Ini",
-        "type": "Jenis Transaksi",
-        "income": "Pemasukan",
-        "expense": "Pengeluaran",
-        "desc": "Keterangan / Kategori",
-        "desc_placeholder": "Contoh: Gaji bulanan, Makan siang...",
-        "amount": "Nominal (Rupiah)",
-        "save": "Simpan ke Kantong",
-        "back": "⬅️ Kembali ke Dashboard",
-        "history": "Riwayat Transaksi",
-        "no_data": "Belum ada transaksi di kantong ini.",
-        "download_title": "Pilih Format Unduhan Laporan",
-        "btn_excel": "📊 Unduh format Excel (.xlsx)",
-        "btn_pdf": "📄 Unduh format PDF Laporan",
-        "success": "Transaksi berhasil disimpan!",
-        "logout": "Keluar Akun"
-    },
-    "EN": {
-        "login_header": "Welcome to Pocket Finance",
-        "login_subheader": "Please enter your email to access your personal pocket",
-        "btn_login": "Enter Application",
-        "admin_title": "👑 CENTRAL PANEL (Owner View)",
-        "admin_subtitle": "List of active users currently using your application",
-        "total_users": "Total Registered Users",
-        "user_list": "User Email Registry",
-        "pocket_in": "Income Pocket",
-        "pocket_out": "Expense Pocket",
-        "pocket_balance": "Balance Pocket",
-        "form_title": "Input Today's Transaction",
-        "type": "Transaction Type",
-        "income": "Income",
-        "expense": "Expense",
-        "desc": "Description / Category",
-        "desc_placeholder": "e.g. Monthly salary, Lunch...",
-        "amount": "Amount (Rupiah)",
-        "save": "Save to Pocket",
-        "back": "⬅️ Back to Dashboard",
-        "history": "Transaction History",
-        "no_data": "No transactions in this pocket yet.",
-        "download_title": "Select Report Download Format",
-        "btn_excel": "📊 Download Excel Format (.xlsx)",
-        "btn_pdf": "📄 Download PDF Report",
-        "success": "Transaction saved successfully!",
-        "logout": "Logout Account"
+st.markdown("""
+<style>
+    /* Mengatur tombol kantong atas agar tetap berjejer horizontal di layar HP */
+    @media (max-width: 640px) {
+        div[data-testid="stHorizontalBlock"] {
+            display: flex !important;
+            flex-direction: row !important;
+            flex-wrap: nowrap !important;
+            justify-content: space-between !important;
+            gap: 4px !important;
+        }
+        div[data-testid="column"] {
+            width: 33.33% !important;
+            min-width: 0px !important;
+            padding: 0px !important;
+        }
+        div[data-testid="column"] button {
+            padding: 6px 2px !important;
+            font-size: 10px !important;
+        }
     }
-}
+    /* Mempercantik tampilan card keuangan */
+    .metric-card {
+        background-color: #ffffff;
+        border: 1px solid #e2e8f0;
+        padding: 12px;
+        border-radius: 16px;
+        text-align: center;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+</style>
+""", unsafe_allow_html=True)
 
-st.set_page_config(page_title="Financial Pockets Database", layout="wide")
+# ========================================================
+# 3. SISTEM AUTENTIKASI: LOGIN & DAFTAR AKUN
+# ========================================================
+if not st.session_state.user_email:
+    st.markdown("<h2 style='text-align: center; color: #4F46E5;'>Pocket Keuangan 2026</h2>", unsafe_allow_html=True)
+    
+    col_auth1, col_auth2, col_auth3 = st.columns([0.2, 0.6, 0.2])
+    with col_auth2:
+        # Pilihan Mode: Login atau Daftar
+        mode = st.radio("Aksi Sistem", ["Login Masuk Akun", "Daftar Akun Baru"], horizontal=True, label_visibility="collapsed")
+        
+        with st.form("auth_form"):
+            email_input = st.text_input("Alamat Email", placeholder="contoh@email.com").strip().lower()
+            password_input = st.text_input("Kata Sandi / Password", type="password", placeholder="••••••••")
+            submit_auth = st.form_submit_button("Eksekusi" if mode == "Login Masuk Akun" else "Buat Akun Baru", use_container_width=True)
+            
+            if submit_auth:
+                if not email_input or not password_input or "@" not in email_input:
+                    st.error("Format Email atau Password tidak valid!")
+                else:
+                    if mode == "Login Masuk Akun":
+                        # Proses Login
+                        res = supabase.table("users").select("*").eq("email", email_input).eq("password", password_input).execute()
+                        if len(res.data) > 0:
+                            st.session_state.user_email = email_input
+                            st.rerun()
+                        else:
+                            st.error("Email atau Kata Sandi Anda salah!")
+                    else:
+                        # Proses Pendaftaran
+                        check_user = supabase.table("users").select("email").eq("email", email_input).execute()
+                        if len(check_user.data) > 0:
+                            st.error("Email ini sudah terdaftar! Silakan Login.")
+                        else:
+                            supabase.table("users").insert({"email": email_input, "password": password_input}).execute()
+                            st.success("Akun berhasil dibuat! Silakan pindah ke opsi 'Login Masuk Akun'.")
+    st.stop()
 
-if "lang" not in st.session_state:
-    st.session_state.lang = "ID"
-if "user_email" not in st.session_state:
-    st.session_state.user_email = None
-if "current_page" not in st.session_state:
-    st.session_state.current_page = "dashboard"
-
-t = LANG[st.session_state.lang]
-
-col_top1, col_top2 = st.columns([0.8, 0.2])
-with col_top2:
-    lang_choice = st.selectbox("Language", ["ID", "EN"], index=0 if st.session_state.lang == "ID" else 1, label_visibility="collapsed")
-    if lang_choice != st.session_state.lang:
-        st.session_state.lang = lang_choice
+# ========================================================
+# 4. HALAMAN KHUSUS PEMILIK (ADMIN CONTROL PUSAT)
+# ========================================================
+if st.session_state.user_email == EMAIL_ADMIN_PUSAT:
+    st.title("👑 PANEL UTAMA PEMILIK APLIKASI")
+    if st.button("Keluar Sistem / Logout"):
+        st.session_state.user_email = None
         st.rerun()
-    if st.session_state.user_email:
-        if st.button(t["logout"], type="secondary", use_container_width=True):
-            st.session_state.user_email = None
-            st.session_state.current_page = "dashboard"
+    st.write("---")
+    
+    res_u = supabase.table("users").select("*").execute()
+    res_t = supabase.table("transactions").select("*").execute()
+    
+    st.metric("Total Pengguna Aktif", len(res_u.data))
+    st.write("### Daftar Akun Pengguna Terdaftar:")
+    st.dataframe(pd.DataFrame(res_u.data), use_container_width=True)
+    st.stop()
+
+# ========================================================
+# 5. INTEGRASI NAVIGASI & PENARIKAN DATA USER PERSONAL
+# ========================================================
+email_active = st.session_state.user_email
+
+# Tarik semua data pelengkap dari database cloud
+tx_res = supabase.table("transactions").select("*").eq("user_email", email_active).execute()
+budget_res = supabase.table("budgets").select("*").eq("user_email", email_active).execute()
+saving_res = supabase.table("savings_targets").select("*").eq("user_email", email_active).execute()
+debt_res = supabase.table("debts").select("*").eq("user_email", email_active).execute()
+
+df_tx = pd.DataFrame(tx_res.data)
+df_budget = pd.DataFrame(budget_res.data)
+df_saving = pd.DataFrame(saving_res.data)
+df_debt = pd.DataFrame(debt_res.data)
+
+# Hitung Akumulasi Nominal Kantong Utama
+total_in = df_tx[df_tx["jenis"] == "Pemasukan"]["nominal"].sum() if not df_tx.empty else 0
+total_out = df_tx[df_tx["jenis"] == "Pengeluaran"]["nominal"].sum() if not df_tx.empty else 0
+net_balance = total_in - total_out
+
+# ========================================================
+# UI ATAS: 3 TOMBOL KANTONG BERJEJER HORIZONTAL (HP OPTIMIZED)
+# ========================================================
+c_in, c_out, c_bal = st.columns(3)
+with c_in:
+    if st.button(f"🟢 Masuk\nRp {total_in:,.0f}", use_container_width=True):
+        st.session_state.current_page = "Kantong Pemasukan"
+with c_out:
+    if st.button(f"🔴 Keluar\nRp {total_out:,.0f}", use_container_width=True):
+        st.session_state.current_page = "Kantong Pengeluaran"
+with c_bal:
+    if st.button(f"🔵 Sisa\nRp {net_balance:,.0f}", use_container_width=True):
+        st.session_state.current_page = "Dashboard"
+
+# Sidebar untuk menu fitur pelengkap harian - tahunan
+with st.sidebar:
+    st.write(f"👤 **{email_active}**")
+    menu_fitur = st.radio("MENU FITUR KEUANGAN", [
+        "🏠 Dashboard & Input",
+        "💼 Dompet & Anggaran Bulanan",
+        "🎯 Target Tabungan",
+        "🤝 Catatan Hutang & Piutang",
+        "📊 Grafik Mingguan/Bulanan/Tahunan"
+    ])
+    if st.button("🚪 Keluar Akun (Logout)", use_container_width=True):
+        st.session_state.user_email = None
+        st.rerun()
+
+# HELPER: Generator Dokumen
+def get_excel_bytes(df_target):
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine='openpyxl') as w: df_target.to_excel(w, index=False)
+    return out.getvalue()
+
+# ========================================================
+# LOGIKA ROUTING HALAMAN FITUR KEUANGAN LENGKAP
+# ========================================================
+st.write("---")
+
+# A. HALAMAN SUB-KANTONG DETAIL (PEMASUKAN / PENGELUARAN)
+if st.session_state.current_page != "Dashboard":
+    st.subheader(f"🗂️ Detail {st.session_state.current_page}")
+    if st.button("⬅️ Kembali ke Dashboard Utama"):
+        st.session_state.current_page = "Dashboard"
+        st.rerun()
+        
+    filter_jenis = "Pemasukan" if "Pemasukan" in st.session_state.current_page else "Pengeluaran"
+    if df_tx.empty:
+        st.info("Belum ada riwayat transaksi.")
+    else:
+        df_filtered = df_tx[df_tx["jenis"] == filter_jenis].reset_index(drop=True)
+        if df_filtered.empty:
+            st.info("Belum ada data di kantong ini.")
+        else:
+            st.dataframe(df_filtered[["tanggal", "kategori", "dompet", "keterangan", "nominal"]], use_container_width=True)
+            st.download_button("📊 Ekspor ke Excel (.xlsx)", get_excel_bytes(df_filtered), f"laporan_{filter_jenis}.xlsx")
+
+# B. DASHBOARD UTAMA & PENCATATAN HARIAN
+elif menu_fitur == "🏠 Dashboard & Input":
+    st.subheader("📊 Dashboard Saldo & Pencatatan Transaksi")
+    
+    # Form Input Transaksi Hari Ini (Bagian Bawah Tiga Kantong)
+    with st.form("tx_form", clear_on_submit=True):
+        col_f1, col_f2 = st.columns(2)
+        with col_f1:
+            in_jenis = st.selectbox("Jenis Transaksi", ["Pengeluaran", "Pemasukan"])
+            in_kategori = st.selectbox("Kategori", ["Gaji Utama", "Investasi", "Makanan & Minuman", "Transportasi", "Belanja", "Tagihan", "Hiburan", "Lainnya"])
+        with col_f2:
+            in_dompet = st.selectbox("Dompet / Rekening Sumber", ["Cash/Tunai", "Bank Mandiri", "Bank BCA", "E-Wallet (Gopay/OVO)"])
+            in_nominal = st.number_input("Nominal Transaksi (Rp)", min_value=0, step=1000)
+            
+        in_ket = st.text_input("Keterangan Transaksi", placeholder="Contoh: Beli bensin motor, makan bakso")
+        submit_tx = st.form_submit_button("Simpan Transaksi Hari Ini")
+        
+        if submit_tx and in_nominal > 0:
+            supabase.table("transactions").insert({
+                "user_email": email_active, "tanggal": datetime.now().strftime("%Y-%m-%d"),
+                "jenis": in_jenis, "kategori": in_kategori, "dompet": in_dompet,
+                "keterangan": in_ket, "nominal": in_nominal
+            }).execute()
+            st.success("Transaksi berhasil masuk ke dalam database kantong!")
+            st.invalidate()
             st.rerun()
 
-# GERBANG LOGIN
-if not st.session_state.user_email:
-    st.write("---")
-    st.markdown(f"<h2 style='text-align: center;'>{t['login_header']}</h2>", unsafe_allow_html=True)
-    st.markdown(f"<p style='text-align: center; color: gray;'>{t['login_subheader']}</p>", unsafe_allow_html=True)
+    # Tabel Riwayat Transaksi Ringkas
+    st.write("#### 🕒 10 Riwayat Transaksi Terakhir")
+    if not df_tx.empty:
+        st.dataframe(df_tx.sort_values(by="id", ascending=False).head(10)[["tanggal", "jenis", "kategori", "dompet", "keterangan", "nominal"]], use_container_width=True)
+    else:
+        st.caption("Belum ada riwayat pencatatan.")
+
+# C. FITUR DOMPET & ANGGARAN BULANAN
+elif menu_fitur == "💼 Dompet & Anggaran Bulanan":
+    st.subheader("Anggaran Bulanan & Pos Rekening")
+    current_month = datetime.now().strftime("%Y-%m")
     
-    col_l1, col_l2, col_l3 = st.columns([0.3, 0.4, 0.3])
-    with col_l2:
-        with st.form("login_form"):
-            input_email = st.text_input("Email Address", placeholder="nama@email.com").strip().lower()
-            submit_login = st.form_submit_button(t["btn_login"], use_container_width=True)
+    with st.form("budget_form"):
+        set_budget = st.number_input(f"Set Batas Anggaran Bulanan Bulan Ini ({current_month})", min_value=0, step=50000)
+        if st.form_submit_button("Simpan Anggaran"):
+            supabase.table("budgets").upsert({"user_email": email_active, "bulan_tahun": current_month, "nominal": set_budget}, on_conflict="user_email,bulan_tahun").execute()
+            st.success("Anggaran bulanan berhasil diperbarui!")
+            st.rerun()
             
-            if submit_login:
-                if input_email == "" or "@" not in input_email:
-                    st.error("Masukkan format email yang valid!")
-                else:
-                    conn = sqlite3.connect(DB_NAME)
-                    cursor = conn.cursor()
-                    cursor.execute("INSERT OR IGNORE INTO users (email, tanggal_daftar) VALUES (?, ?)", 
-                                   (input_email, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-                    conn.commit()
-                    conn.close()
-                    
-                    st.session_state.user_email = input_email
-                    st.rerun()
-    st.stop()
+    # Tampilkan progres sisa anggaran bulanan rill
+    budget_val = df_budget[df_budget["bulan_tahun"] == current_month]["nominal"].values[0] if not df_budget.empty else 0
+    st.metric("Alokasi Anggaran Bulanan Anda", f"Rp {budget_val:,.0f}")
+    st.progress(min(float(total_out / budget_val) if budget_val > 0 else 0.0, 1.0), text=f"Pengeluaran Terpakai: Rp {total_out:,.0f} dari Rp {budget_val:,.0f}")
 
-# KENDALI PUSAT ADMIN
-if st.session_state.user_email == EMAIL_ADMIN_PUSAT:
-    st.title(t["admin_title"])
-    st.caption(t["admin_subtitle"])
-    st.write("---")
-    
-    conn = sqlite3.connect(DB_NAME)
-    df_users = pd.read_sql_query("SELECT * FROM users", conn)
-    df_total_tx = pd.read_sql_query("SELECT * FROM transactions", conn)
-    conn.close()
-    
-    col_adm1, col_adm2 = st.columns(2)
-    with col_adm1:
-        st.metric(label=t["total_users"], value=len(df_users))
-    with col_adm2:
-        st.metric(label="Total Seluruh Log Transaksi Sistem", value=len(df_total_tx))
-        
-    st.write(f"### 👥 {t['user_list']}")
-    st.dataframe(df_users, use_container_width=True)
-    st.stop()
-
-# HALAMAN USER PERSONAL
-email_user = st.session_state.user_email
-st.caption(f"👤 Login as: **{email_user}**")
-
-conn = sqlite3.connect(DB_NAME)
-df_user_tx = pd.read_sql_query("SELECT * FROM transactions WHERE user_email = ?", conn, params=(email_user,))
-conn.close()
-
-total_masuk = df_user_tx[df_user_tx["jenis"] == "Pemasukan"]["nominal"].sum() if not df_user_tx.empty else 0
-total_keluar = df_user_tx[df_user_tx["jenis"] == "Pengeluaran"]["nominal"].sum() if not df_user_tx.empty else 0
-sisa_uang = total_masuk - total_keluar
-
-st.write("---")
-k_in, k_out, k_bal = st.columns(3)
-with k_in:
-    st.metric(label=t["pocket_in"], value=f"Rp {total_masuk:,.0f}")
-    if st.button("📂 " + t["pocket_in"] + " →", use_container_width=True, key="btn_in"):
-        st.session_state.current_page = "income_page"
-with k_out:
-    st.metric(label=t["pocket_out"], value=f"Rp {total_keluar:,.0f}")
-    if st.button("📂 " + t["pocket_out"] + " →", use_container_width=True, key="btn_out"):
-        st.session_state.current_page = "expense_page"
-with k_bal:
-    st.metric(label=t["pocket_balance"], value=f"Rp {sisa_uang:,.0f}")
-    if st.button("📂 " + t["pocket_balance"] + " →", use_container_width=True, key="btn_bal"):
-        st.session_state.current_page = "balance_page"
-
-# LOGIKA GENERATOR LAPORAN YANG SUDAH DIPERBAIKI (generate_excel)
-def generate_excel(df_data, title):
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df_data.to_excel(writer, index=False, sheet_name=title[:30])
-    return output.getvalue()
-
-def get_html_pdf_download(df_data, title, total_val):
-    show_jenis = "jenis" in df_data.columns
-    th_jenis = "<th>Jenis</th>" if show_jenis else ""
-    
-    rows = ""
-    for idx, row in df_data.iterrows():
-        td_jenis = f"<td style='border:1px solid #ddd;padding:8px;text-align:center;'>{row['jenis']}</td>" if show_jenis else ""
-        rows += f"""<tr>
-            <td style='border:1px solid #ddd;padding:8px;text-align:center;'>{idx+1}</td>
-            <td style='border:1px solid #ddd;padding:8px;text-align:center;'>{row['tanggal']}</td>
-            <td style='border:1px solid #ddd;padding:8px;'>{row['keterangan']}</td>
-            {td_jenis}
-            <td style='border:1px solid #ddd;padding:8px;text-align:right;'>Rp {row['nominal']:,.0f}</td>
-        </tr>"""
-        
-    return f"""<html><body onload='window.print()'>
-        <h2 style='text-align:center;'>{title.upper()}</h2>
-        <p style='text-align:center;'>User Email: {email_user}</p>
-        <table style='width:100%;border-collapse:collapse;'>
-            <thead>
-                <tr style='background:#f2f2f2;'>
-                    <th>No</th>
-                    <th>Tanggal</th>
-                    <th>Keterangan</th>
-                    {th_jenis}
-                    <th>Nominal</th>
-                </tr>
-            </thead>
-            <tbody>{rows}</tbody>
-        </table>
-        <h3 style='text-align:right;margin-top:20px;'>Total: Rp {total_val:,.0f}</h3>
-    </body></html>"""
-
-st.write("---")
-
-if st.session_state.current_page == "dashboard":
-    st.write(f"### 📥 {t['form_title']}")
-    with st.form("user_input_form", clear_on_submit=True):
-        jenis_tx = st.selectbox(t["type"], [t["income"], t["expense"]])
-        keterangan_tx = st.text_input(t["desc"], placeholder=t["desc_placeholder"])
-        nominal_tx = st.number_input(t["amount"], min_value=0, step=1000, value=0)
-        
-        if st.form_submit_button(t["save"]):
-            if keterangan_tx.strip() == "" or nominal_tx <= 0:
-                st.error("Data tidak valid!")
-            else:
-                real_type = "Pemasukan" if jenis_tx == t["income"] else "Pengeluaran"
-                conn = sqlite3.connect(DB_NAME)
-                cursor = conn.cursor()
-                cursor.execute("INSERT INTO transactions (user_email, tanggal, jenis, keterangan, nominal) VALUES (?, ?, ?, ?, ?)",
-                               (email_user, datetime.now().strftime("%Y-%m-%d"), real_type, keterangan_tx, nominal_tx))
-                conn.commit()
-                conn.close()
-                st.success(t["success"])
+# D. FITUR TARGET TABUNGAN
+elif menu_fitur == "🎯 Target Tabungan":
+    st.subheader("🎯 Impian & Target Celengan Tabungan")
+    with st.form("saving_form", clear_on_submit=True):
+        s_nama = st.text_input("Nama Impian / Barang", placeholder="Contoh: Beli Laptop Baru, Liburan Akhir Tahun")
+        s_target = st.number_input("Target Dana Terkumpul (Rp)", min_value=0, step=100000)
+        if st.form_submit_button("Tambah Target"):
+            if s_nama:
+                supabase.table("savings_targets").insert({"user_email": email_active, "nama_target": s_nama, "nominal_target": s_target, "terkumpul": 0}).execute()
+                st.success("Target tabungan baru berhasil ditambahkan!")
                 st.rerun()
+                
+    if not df_saving.empty:
+        st.write("#### Daftar Target Celengan Anda:")
+        st.dataframe(df_saving[["nama_target", "nominal_target", "terkumpul"]], use_container_width=True)
 
-elif st.session_state.current_page == "income_page":
-    if st.button(t["back"]): st.session_state.current_page = "dashboard"; st.rerun()
-    st.subheader(t["pocket_in"])
-    df_inc = df_user_tx[df_user_tx["jenis"] == "Pemasukan"].reset_index(drop=True)
-    if df_inc.empty: st.warning(t["no_data"])
-    else:
-        st.dataframe(df_inc[["tanggal", "keterangan", "nominal"]], use_container_width=True)
-        col_d1, col_d2 = st.columns(2)
-        col_d1.download_button(t["btn_excel"], generate_excel(df_inc[["tanggal", "keterangan", "nominal"]], "Pemasukan"), "pemasukan.xlsx")
-        col_d2.download_button(t["btn_pdf"], get_html_pdf_download(df_inc[["tanggal", "keterangan", "nominal"]], t["pocket_in"], total_masuk), "pemasukan.html")
+# E. FITUR CATATAN HUTANG & PIUTANG
+elif menu_fitur == "🤝 Catatan Hutang & Piutang":
+    st.subheader("🤝 Buku Pencatatan Hutang dan Piutang")
+    with st.form("debt_form", clear_on_submit=True):
+        d_tipe = st.selectbox("Tipe Catatan", ["Hutang", "Piutang"])
+        d_nama = st.text_input("Nama Orang Terkait")
+        d_nominal = st.number_input("Nominal (Rp)", min_value=0, step=10000)
+        if st.form_submit_button("Simpan Catatan"):
+            if d_nama and d_nominal > 0:
+                supabase.table("debts").insert({"user_email": email_active, "tipe": d_tipe, "nama_orang": d_nama, "nominal": d_nominal, "status": "Belum Lunas"}).execute()
+                st.success("Catatan saldo piutang/hutang disimpan!")
+                st.rerun()
+                
+    if not df_debt.empty:
+        st.write("#### Daftar Tanggungan Aktif:")
+        st.dataframe(df_debt[["tipe", "nama_orang", "nominal", "status"]], use_container_width=True)
 
-elif st.session_state.current_page == "expense_page":
-    if st.button(t["back"]): st.session_state.current_page = "dashboard"; st.rerun()
-    st.subheader(t["pocket_out"])
-    df_exp = df_user_tx[df_user_tx["jenis"] == "Pengeluaran"].reset_index(drop=True)
-    if df_exp.empty: st.warning(t["no_data"])
+# F. LAPORAN & GRAFIK BERKALA (MINGGUAN, BULANAN, TAHUNAN)
+elif menu_fitur == "📊 Grafik Mingguan/Bulanan/Tahunan":
+    st.subheader("📉 Laporan & Analisis Grafik Keuangan Berkala")
+    if df_tx.empty:
+        st.info("Masukkan data transaksi terlebih dahulu untuk memunculkan visualisasi grafik.")
     else:
-        st.dataframe(df_exp[["tanggal", "keterangan", "nominal"]], use_container_width=True)
-        col_d1, col_d2 = st.columns(2)
-        col_d1.download_button(t["btn_excel"], generate_excel(df_exp[["tanggal", "keterangan", "nominal"]], "Pengeluaran"), "pengeluaran.xlsx")
-        col_d2.download_button(t["btn_pdf"], get_html_pdf_download(df_exp[["tanggal", "keterangan", "nominal"]], t["pocket_out"], total_keluar), "pengeluaran.html")
-
-elif st.session_state.current_page == "balance_page":
-    if st.button(t["back"]): st.session_state.current_page = "dashboard"; st.rerun()
-    st.subheader(t["pocket_balance"])
-    if df_user_tx.empty: st.warning(t["no_data"])
-    else:
-        st.dataframe(df_user_tx[["tanggal", "jenis", "keterangan", "nominal"]], use_container_width=True)
-        col_d1, col_d2 = st.columns(2)
-        col_d1.download_button(t["btn_excel"], generate_excel(df_user_tx[["tanggal", "jenis", "keterangan", "nominal"]], "Sisa Uang"), "neraca_total.xlsx")
-        col_d2.download_button(t["btn_pdf"], get_html_pdf_download(df_user_tx[["tanggal", "jenis", "keterangan", "nominal"]], t["pocket_balance"], sisa_uang), "neraca_total.html")
+        df_tx["tanggal"] = pd.to_datetime(df_tx["tanggal"])
+        
+        # 1. Grafik Mingguan (7 Hari Terakhir)
+        st.write("#### 📆 Tren Pengeluaran Mingguan (7 Hari Terakhir)")
+        one_week_ago = datetime.now() - timedelta(days=7)
+        df_week = df_tx[(df_tx["tanggal"] >= one_week_ago) & (df_tx["jenis"] == "Pengeluaran")]
+        if not df_week.empty:
+            df_week_group = df_week.groupby(df_week["tanggal"].dt.strftime('%Y-%m-%d'))["nominal"].sum()
+            st.bar_chart(df_week_group)
+        else: st.caption("Tidak ada pengeluaran dalam 7 hari terakhir.")
+        
+        # 2. Grafik Bulanan (Bulan Berjalan)
+        st.write("#### 📅 Perbandingan Pemasukan vs Pengeluaran Bulan Ini")
+        df_tx["bulan"] = df_tx["tanggal"].dt.strftime('%Y-%m')
+        this_month = datetime.now().strftime('%Y-%m')
+        df_month = df_tx[df_tx["bulan"] == this_month]
+        if not df_month.empty:
+            df_month_group = df_month.groupby("jenis")["nominal"].sum()
+            st.bar_chart(df_month_group)
+        else: st.caption("Belum ada data transaksi di bulan ini.")
+        
+        # 3. Grafik Tahunan (Tahun Berjalan)
+        st.write("#### 🏛️ Akumulasi Total Berjalan Sepanjang Tahun 2026")
+        df_year_group = df_tx.groupby("jenis")["nominal"].sum()
+        st.bar_chart(df_year_group)
