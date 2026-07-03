@@ -12,14 +12,12 @@ DB_NAME = "database_kantong.db"
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    # Tabel Pengguna
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             email TEXT PRIMARY KEY,
             tanggal_daftar TEXT
         )
     """)
-    # Tabel Transaksi yang terikat dengan Email Pengguna
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,10 +32,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Jalankan Inisialisasi Database
 init_db()
-
-# Tentukan Email Pemilik / Admin Utama di sini
 EMAIL_ADMIN_PUSAT = "admin@apps.com"
 
 # ========================================================
@@ -102,7 +97,6 @@ LANG = {
     }
 }
 
-# Config & Session Initialization
 st.set_page_config(page_title="Financial Pockets Database", layout="wide")
 
 if "lang" not in st.session_state:
@@ -114,7 +108,6 @@ if "current_page" not in st.session_state:
 
 t = LANG[st.session_state.lang]
 
-# Top Bar (Language Selector & Logout)
 col_top1, col_top2 = st.columns([0.8, 0.2])
 with col_top2:
     lang_choice = st.selectbox("Language", ["ID", "EN"], index=0 if st.session_state.lang == "ID" else 1, label_visibility="collapsed")
@@ -127,9 +120,7 @@ with col_top2:
             st.session_state.current_page = "dashboard"
             st.rerun()
 
-# ========================================================
-# 3. INTERFACES: SCREEN GERBANG LOGIN
-# ========================================================
+# GERBANG LOGIN
 if not st.session_state.user_email:
     st.write("---")
     st.markdown(f"<h2 style='text-align: center;'>{t['login_header']}</h2>", unsafe_allow_html=True)
@@ -145,7 +136,6 @@ if not st.session_state.user_email:
                 if input_email == "" or "@" not in input_email:
                     st.error("Masukkan format email yang valid!")
                 else:
-                    # Daftarkan email ke database pusat jika belum ada
                     conn = sqlite3.connect(DB_NAME)
                     cursor = conn.cursor()
                     cursor.execute("INSERT OR IGNORE INTO users (email, tanggal_daftar) VALUES (?, ?)", 
@@ -155,12 +145,9 @@ if not st.session_state.user_email:
                     
                     st.session_state.user_email = input_email
                     st.rerun()
-    st.info(f"💡 Info Demo Pemilik: Masukkan email **`{EMAIL_ADMIN_PUSAT}`** untuk masuk ke Aplikasi Pusat / Pemantau Akun.")
     st.stop()
 
-# ========================================================
-# 4. INTERFACES: SCREEN APLIKASI PUSAT (ADMIN / OWNER VIEW)
-# ========================================================
+# KENDALI PUSAT ADMIN
 if st.session_state.user_email == EMAIL_ADMIN_PUSAT:
     st.title(t["admin_title"])
     st.caption(t["admin_subtitle"])
@@ -171,7 +158,6 @@ if st.session_state.user_email == EMAIL_ADMIN_PUSAT:
     df_total_tx = pd.read_sql_query("SELECT * FROM transactions", conn)
     conn.close()
     
-    # Statistik Pusat
     col_adm1, col_adm2 = st.columns(2)
     with col_adm1:
         st.metric(label=t["total_users"], value=len(df_users))
@@ -182,52 +168,73 @@ if st.session_state.user_email == EMAIL_ADMIN_PUSAT:
     st.dataframe(df_users, use_container_width=True)
     st.stop()
 
-# ========================================================
-# 5. INTERFACES: SCREEN USER (KANTONG KEUANGAN PERSONAL)
-# ========================================================
+# HALAMAN USER PERSONAL
 email_user = st.session_state.user_email
 st.caption(f"👤 Login as: **{email_user}**")
 
-# Ambil data spesifik milik user yang sedang login
 conn = sqlite3.connect(DB_NAME)
 df_user_tx = pd.read_sql_query("SELECT * FROM transactions WHERE user_email = ?", conn, params=(email_user,))
 conn.close()
 
-# Hitung nilai kantong personal
 total_masuk = df_user_tx[df_user_tx["jenis"] == "Pemasukan"]["nominal"].sum() if not df_user_tx.empty else 0
 total_keluar = df_user_tx[df_user_tx["jenis"] == "Pengeluaran"]["nominal"].sum() if not df_user_tx.empty else 0
 sisa_uang = total_masuk - total_keluar
 
-# Komponen 3 Kantong Atas (Tombol Navigasi Halaman)
 st.write("---")
 k_in, k_out, k_bal = st.columns(3)
 with k_in:
     st.metric(label=t["pocket_in"], value=f"Rp {total_masuk:,.0f}")
-    if st.button("📂 " + t["pocket_in"] + " →", use_container_width=True):
+    if st.button("📂 " + t["pocket_in"] + " →", use_container_width=True, key="btn_in"):
         st.session_state.current_page = "income_page"
 with k_out:
     st.metric(label=t["pocket_out"], value=f"Rp {total_keluar:,.0f}")
-    if st.button("📂 " + t["pocket_out"] + " →", use_container_width=True):
+    if st.button("📂 " + t["pocket_out"] + " →", use_container_width=True, key="btn_out"):
         st.session_state.current_page = "expense_page"
 with k_bal:
     st.metric(label=t["pocket_balance"], value=f"Rp {sisa_uang:,.0f}")
-    if st.button("📂 " + t["pocket_balance"] + " →", use_container_width=True):
+    if st.button("📂 " + t["pocket_balance"] + " →", use_container_width=True, key="btn_bal"):
         st.session_state.current_page = "balance_page"
 
-# LOGIKA GENERATOR LAPORAN
-def get_excel_download(df_data):
+# LOGIKA GENERATOR LAPORAN YANG SUDAH DIPERBAIKI (generate_excel)
+def generate_excel(df_data, title):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df_data[["tanggal", "jenis", "keterangan", "nominal"]].to_excel(writer, index=False, sheet_name="Laporan")
+        df_data.to_excel(writer, index=False, sheet_name=title[:30])
     return output.getvalue()
 
 def get_html_pdf_download(df_data, title, total_val):
+    show_jenis = "jenis" in df_data.columns
+    th_jenis = "<th>Jenis</th>" if show_jenis else ""
+    
     rows = ""
     for idx, row in df_data.iterrows():
-        rows += f"<tr><td style='border:1px solid #dd;padding:8px;text-align:center;'>{idx+1}</td><td style='border:1px solid #dd;padding:8px;text-align:center;'>{row['tanggal']}</td><td style='border:1px solid #dd;padding:8px;'>{row['keterangan']}</td><td style='border:1px solid #dd;padding:8px;text-align:right;'>Rp {row['nominal']:,.0f}</td></tr>"
-    return f"<html><body onload='window.print()'><h2 style='text-align:center;'>{title.upper()}</h2><p style='text-align:center;'>User Email: {email_user}</p><table style='width:100%;border-collapse:collapse;'><thead><tr style='background:#f2f2f2;'><th>No</th><th>Tanggal</th><th>Keterangan</th><th>Nominal</th></tr></thead><tbody>{rows}</tbody></table><h3 style='text-align:right;margin-top:20px;'>Total: Rp {total_val:,.0f}</h3></body></html>"
+        td_jenis = f"<td style='border:1px solid #ddd;padding:8px;text-align:center;'>{row['jenis']}</td>" if show_jenis else ""
+        rows += f"""<tr>
+            <td style='border:1px solid #ddd;padding:8px;text-align:center;'>{idx+1}</td>
+            <td style='border:1px solid #ddd;padding:8px;text-align:center;'>{row['tanggal']}</td>
+            <td style='border:1px solid #ddd;padding:8px;'>{row['keterangan']}</td>
+            {td_jenis}
+            <td style='border:1px solid #ddd;padding:8px;text-align:right;'>Rp {row['nominal']:,.0f}</td>
+        </tr>"""
+        
+    return f"""<html><body onload='window.print()'>
+        <h2 style='text-align:center;'>{title.upper()}</h2>
+        <p style='text-align:center;'>User Email: {email_user}</p>
+        <table style='width:100%;border-collapse:collapse;'>
+            <thead>
+                <tr style='background:#f2f2f2;'>
+                    <th>No</th>
+                    <th>Tanggal</th>
+                    <th>Keterangan</th>
+                    {th_jenis}
+                    <th>Nominal</th>
+                </tr>
+            </thead>
+            <tbody>{rows}</tbody>
+        </table>
+        <h3 style='text-align:right;margin-top:20px;'>Total: Rp {total_val:,.0f}</h3>
+    </body></html>"""
 
-# LOGIKA ROUTING HALAMAN PERSONAL
 st.write("---")
 
 if st.session_state.current_page == "dashboard":
@@ -260,7 +267,7 @@ elif st.session_state.current_page == "income_page":
         st.dataframe(df_inc[["tanggal", "keterangan", "nominal"]], use_container_width=True)
         col_d1, col_d2 = st.columns(2)
         col_d1.download_button(t["btn_excel"], generate_excel(df_inc[["tanggal", "keterangan", "nominal"]], "Pemasukan"), "pemasukan.xlsx")
-        col_d2.download_button(t["btn_pdf"], get_html_pdf_download(df_inc, t["pocket_in"], total_masuk), "pemasukan.html")
+        col_d2.download_button(t["btn_pdf"], get_html_pdf_download(df_inc[["tanggal", "keterangan", "nominal"]], t["pocket_in"], total_masuk), "pemasukan.html")
 
 elif st.session_state.current_page == "expense_page":
     if st.button(t["back"]): st.session_state.current_page = "dashboard"; st.rerun()
@@ -271,7 +278,7 @@ elif st.session_state.current_page == "expense_page":
         st.dataframe(df_exp[["tanggal", "keterangan", "nominal"]], use_container_width=True)
         col_d1, col_d2 = st.columns(2)
         col_d1.download_button(t["btn_excel"], generate_excel(df_exp[["tanggal", "keterangan", "nominal"]], "Pengeluaran"), "pengeluaran.xlsx")
-        col_d2.download_button(t["btn_pdf"], get_html_pdf_download(df_exp, t["pocket_out"], total_keluar), "pengeluaran.html")
+        col_d2.download_button(t["btn_pdf"], get_html_pdf_download(df_exp[["tanggal", "keterangan", "nominal"]], t["pocket_out"], total_keluar), "pengeluaran.html")
 
 elif st.session_state.current_page == "balance_page":
     if st.button(t["back"]): st.session_state.current_page = "dashboard"; st.rerun()
@@ -280,5 +287,5 @@ elif st.session_state.current_page == "balance_page":
     else:
         st.dataframe(df_user_tx[["tanggal", "jenis", "keterangan", "nominal"]], use_container_width=True)
         col_d1, col_d2 = st.columns(2)
-        col_d1.download_button(t["btn_excel"], generate_excel(df_user_tx, "Sisa Uang"), "neraca_total.xlsx")
-        col_d2.download_button(t["btn_pdf"], get_html_pdf_download(df_user_tx, t["pocket_balance"], sisa_uang), "neraca_total.html")
+        col_d1.download_button(t["btn_excel"], generate_excel(df_user_tx[["tanggal", "jenis", "keterangan", "nominal"]], "Sisa Uang"), "neraca_total.xlsx")
+        col_d2.download_button(t["btn_pdf"], get_html_pdf_download(df_user_tx[["tanggal", "jenis", "keterangan", "nominal"]], t["pocket_balance"], sisa_uang), "neraca_total.html")
